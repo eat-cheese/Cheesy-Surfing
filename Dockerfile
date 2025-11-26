@@ -33,7 +33,7 @@ RUN npm install
 COPY . .
 
 # Expose port
-EXPOSE 10000
+EXPOSE 3000
 
 # Set environment variable for Puppeteer
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

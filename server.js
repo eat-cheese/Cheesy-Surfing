@@ -55,11 +55,16 @@ app.post('/api/navigate', async (req, res) => {
   }
 });
 
-// API endpoint to get screenshot
+// API endpoint to get screenshot (optimized for speed)
 app.get('/api/screenshot', async (req, res) => {
   try {
     const { page } = await initBrowser();
-    const screenshot = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 80 });
+    const screenshot = await page.screenshot({ 
+      encoding: 'base64', 
+      type: 'jpeg', 
+      quality: 60,  // Lower quality for faster updates
+      optimizeForSpeed: true
+    });
     res.json({ success: true, screenshot: `data:image/jpeg;base64,${screenshot}` });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

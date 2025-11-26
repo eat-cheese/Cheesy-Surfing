@@ -87,6 +87,17 @@
       padding: 8px 12px;
       color: #bfdbfe;
       font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .fps-counter {
+      margin-left: auto;
+      background: #374151;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-family: monospace;
     }
 
     .viewport {
@@ -152,7 +163,8 @@
       </div>
       
       <div class="status">
-        <strong>Real Browser Server</strong> - This is a real Chrome browser running on the server. Click anywhere to interact!
+        <strong>Real Browser Server</strong> - Virtual Browser
+        <span class="fps-counter" id="fps">FPS: 0</span>
       </div>
     </div>
 
@@ -169,7 +181,10 @@
     const screen = document.getElementById('screen');
     const urlInput = document.getElementById('urlInput');
     const loading = document.getElementById('loading');
+    const fpsCounter = document.getElementById('fps');
     let isLoading = false;
+    let frameCount = 0;
+    let lastFpsUpdate = Date.now();
 
     // Show loading
     function showLoading() {
@@ -190,6 +205,15 @@
         const data = await response.json();
         if (data.success) {
           screen.src = data.screenshot;
+          
+          // Update FPS counter
+          frameCount++;
+          const now = Date.now();
+          if (now - lastFpsUpdate >= 1000) {
+            fpsCounter.textContent = `FPS: ${frameCount}`;
+            frameCount = 0;
+            lastFpsUpdate = now;
+          }
         }
       } catch (error) {
         console.error('Screenshot error:', error);
@@ -230,7 +254,7 @@
       }
     }
 
-    // Click on screen
+    // Click on screen (with immediate feedback)
     screen.addEventListener('click', async (e) => {
       const rect = screen.getBoundingClientRect();
       const scaleX = 1920 / rect.width;
@@ -244,7 +268,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x, y })
         });
-        setTimeout(updateScreen, 500);
+        // Update immediately after click
+        setTimeout(updateScreen, 100);
       } catch (error) {
         console.error('Click error:', error);
       }
@@ -285,12 +310,12 @@
       navigate('https://play.geforcenow.com');
     });
 
-    // Auto-refresh screen
+    // Auto-refresh screen - much faster!
     setInterval(() => {
       if (!isLoading) {
         updateScreen();
       }
-    }, 1000);
+    }, 100); // Update every 100ms instead of 1000ms
 
     // Initial load
     updateScreen();
