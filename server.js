@@ -17,10 +17,34 @@ app.use(express.static('public'));
 let browser = null;
 let page = null;
 let previousScreenshot = null;
+let isInitializing = false;
 
-// Initialize browser
+// Initialize browser with better error handling
 async function initBrowser() {
-  if (!browser) {
+  // Prevent multiple initializations at once
+  while (isInitializing) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  try {
+    // Check if browser and page are still valid
+    if (browser && page && !page.isClosed()) {
+      return { browser, page };
+    }
+
+    isInitializing = true;
+    console.log('Initializing browser...');
+
+    // Close old browser if exists
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {
+        console.log('Error closing old browser:', e.message);
+      }
+    }
+
+    // Launch new browser
     browser = await puppeteer.launch({
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
       headless: true,
@@ -31,49 +55,89 @@ async function initBrowser() {
         '--disable-gpu',
         '--window-size=1280,720',
         '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--single-process',
+        '--no-zygote'
       ]
     });
+
+    // Create new page
     page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
-    await page.goto('https://play.geforcenow.com', { waitUntil: 'domcontentloaded' });
+    
+    // Set a reasonable timeout
+    page.setDefaultTimeout(10000);
+    
+    // Navigate to initial URL
+    await page.goto('https://play.geforcenow.com', { 
+      waitUntil: 'domcontentloaded',
+      timeout: 15000 
+    }).catch(err => {
+      console.log('Initial navigation warning:', err.message);
+    });
+
+    console.log('Browser initialized successfully');
+    isInitializing = false;
+    return { browser, page };
+    
+  } catch (error) {
+    isInitializing = false;
+    console.error('Browser initialization failed:', error);
+    browser = null;
+    page = null;
+    throw error;
   }
-  return { browser, page };
 }
 
-// Get optimized screenshot with change detection
+// Get optimized screenshot with better error handling
 async function getOptimizedScreenshot() {
   try {
-    const { page } = await initBrowser();
+    await initBrowser();
     
+    // Double check page is still valid
+    if (!page || page.isClosed()) {
+      console.log('Page is closed, reinitializing...');
+      browser = null;
+      page = null;
+      await initBrowser();
+    }
+
     // Take screenshot as buffer
     const screenshot = await page.screenshot({ 
       type: 'jpeg',
-      quality: 50,
+      quality: 40,
       optimizeForSpeed: true
     });
 
     // Compress further with sharp
     const compressed = await sharp(screenshot)
       .resize(1280, 720, { fit: 'contain' })
-      .jpeg({ quality: 45, mozjpeg: true })
+      .jpeg({ quality: 35, mozjpeg: true })
       .toBuffer();
 
-    // Check if image changed significantly
-    if (previousScreenshot) {
-      const diff = Buffer.compare(
-        compressed.slice(0, 1000), 
-        previousScreenshot.slice(0, 1000)
-      );
-      if (diff === 0) {
-        return null; // No change, don't send
-      }
+    // Simple change detection - compare size
+    if (previousScreenshot && Math.abs(compressed.length - previousScreenshot.length) < 1000) {
+      return null; // Very similar frame, skip
     }
 
     previousScreenshot = compressed;
     return compressed.toString('base64');
+    
   } catch (error) {
-    console.error('Screenshot error:', error);
+    console.error('Screenshot error:', error.message);
+    
+    // Reset browser on error
+    browser = null;
+    page = null;
+    previousScreenshot = null;
+    
+    // Try to reinitialize
+    try {
+      await initBrowser();
+    } catch (reinitError) {
+      console.error('Failed to reinitialize:', reinitError.message);
+    }
+    
     return null;
   }
 }
@@ -201,7 +265,7 @@ wss.on('connection', (ws) => {
   console.log('Client connected');
   let streaming = true;
 
-  // Stream screenshots at 60 FPS
+  // Stream screenshots at 30 FPS (more stable than 60)
   const streamInterval = setInterval(async () => {
     if (!streaming) return;
     
@@ -214,9 +278,9 @@ wss.on('connection', (ws) => {
         }));
       }
     } catch (error) {
-      console.error('Stream error:', error);
+      console.error('Stream error:', error.message);
     }
-  }, 16); // ~60 FPS (1000ms / 60 = 16.67ms)
+  }, 33); // ~30 FPS (1000ms / 30 = 33ms) - more stable than 60
 
   ws.on('close', () => {
     streaming = false;
@@ -231,8 +295,21 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Cleanup
+// Cleanup with better error handling
 process.on('SIGINT', async () => {
-  if (browser) await browser.close();
+  console.log('Shutting down...');
+  try {
+    if (browser) await browser.close();
+  } catch (e) {
+    console.log('Error during shutdown:', e.message);
+  }
   process.exit();
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled rejection:', error);
 });
