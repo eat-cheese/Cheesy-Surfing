@@ -1,120 +1,119 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Virtual Browser</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111827;height:100vh;overflow:hidden}
-.browser-container{display:flex;flex-direction:column;height:100vh}
-.toolbar{background:#1f2937;padding:12px;border-bottom:1px solid #374151}
-.nav-bar{display:flex;gap:8px;align-items:center;margin-bottom:12px}
-.nav-btn{padding:8px 12px;background:#374151;border:none;border-radius:6px;color:#d1d5db;cursor:pointer;font-size:14px;white-space:nowrap}
-.nav-btn:hover{background:#4b5563}
-.url-bar{flex:1;display:flex;align-items:center;background:#374151;border-radius:6px;padding:8px 12px;gap:8px}
-.url-input{flex:1;background:0;border:0;color:#fff;outline:0;font-size:14px}
-.status{background:#1e3a8a;border:1px solid #1e40af;border-radius:6px;padding:8px 12px;color:#bfdbfe;font-size:13px;display:flex;align-items:center;gap:12px}
-.stat{background:#374151;padding:4px 10px;border-radius:4px;font-family:monospace;font-size:12px;color:#34d399}
-.viewport{flex:1;background:#000;display:flex;align-items:center;justify-content:center;position:relative}
-#screen{max-width:100%;max-height:100%;cursor:crosshair}
-.spinner{display:inline-block;width:20px;height:20px;border:3px solid #374151;border-top-color:#60a5fa;border-radius:50%;animation:spin 1s linear infinite;margin-right:10px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.connection-dot{width:10px;height:10px;border-radius:50%;background:#34d399}
-.connection-dot.disconnected{background:#ef4444}
-.loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#1f2937;padding:20px 30px;border-radius:8px;color:#fff}
-</style>
+  <meta charset="utf-8">
+  <title>Cheesy Browser (WebRTC viewer)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{margin:0;background:#111;color:#eee;font-family:sans-serif}
+    .toolbar{padding:12px;background:#1f2937;display:flex;gap:8px;align-items:center}
+    .viewport{height:calc(100vh - 64px);display:flex;align-items:center;justify-content:center;background:#000}
+    video{max-width:100%;max-height:100%;background:#000}
+    .loading{position:absolute;color:#fff}
+  </style>
 </head>
 <body>
-<div class="browser-container">
   <div class="toolbar">
-    <div class="nav-bar">
-      <button class="nav-btn" id="backBtn">← Back</button>
-      <button class="nav-btn" id="forwardBtn">Forward →</button>
-      <button class="nav-btn" id="refreshBtn">⟳ Refresh</button>
-      <button class="nav-btn" id="homeBtn">🏠 Home</button>
-      <div class="url-bar">
-        <input class="url-input" id="urlInput" value="https://play.geforcenow.com" placeholder="Enter URL...">
-      </div>
-    </div>
-    <div class="status">
-      <div style="display:flex;align-items:center;gap:8px">
-        <div id="connectionStatus" class="connection-dot"></div>
-        <strong>Cheesy Surfing Streaming Browser</strong>
-      </div>
-      <div class="stat">FPS: <span id="fps">0</span></div>
-      <div class="stat">Latency: <span id="latency">0ms</span></div>
-      <div class="stat">Bandwidth: <span id="bandwidth">0 KB/s</span></div>
-    </div>
+    <input id="urlInput" style="flex:1;padding:8px;border-radius:6px;border:0;background:#c0b846;color:#fff" value="https://play.geforcenow.com">
+    <button id="navigate">Go</button>
+    <div id="status" style="margin-left:12px">Connecting WebRTC…</div>
   </div>
+
   <div class="viewport">
-    <img id="screen">
-    <div class="loading" id="loading"><span class="spinner"></span>Connecting...</div>
+    <video id="remoteVideo" autoplay playsinline></video>
   </div>
-</div>
 
 <script>
-let ws;
-let frameCount=0,lastFpsUpdate=performance.now();
-let bytesReceived=0,lastBandwidthUpdate=performance.now();
-let lastFrameTime=performance.now();
+(async function () {
+  const status = document.getElementById('status');
+  const remoteVideo = document.getElementById('remoteVideo');
 
-function connect(){
-  const protocol=location.protocol==='https:'?'wss:':'ws:';
-  ws=new WebSocket(protocol+'//'+location.host);
-  ws.binaryType='arraybuffer';
+  async function negotiateWithServer() {
+    status.textContent = 'Requesting offer from server…';
 
-  ws.onopen=()=>{
-    document.getElementById('loading').style.display='none';
-    document.getElementById('connectionStatus').classList.remove('disconnected');
-  }
-
-  ws.onmessage=(event)=>{
-    if(event.data instanceof ArrayBuffer){
-      const blob=new Blob([event.data],{type:'image/jpeg'});
-      const url=URL.createObjectURL(blob);
-      const img=document.getElementById('screen');
-      img.onload=()=>URL.revokeObjectURL(url);
-      img.src=url;
-
-      const now=performance.now();
-      document.getElementById('latency').textContent=Math.round(now-lastFrameTime)+'ms';
-      lastFrameTime=now;
-
-      frameCount++;
-      bytesReceived+=event.data.byteLength;
-      if(now-lastFpsUpdate>=1000){
-        document.getElementById('fps').textContent=frameCount;
-        frameCount=0;
-        lastFpsUpdate=now;
-      }
-      if(now-lastBandwidthUpdate>=1000){
-        document.getElementById('bandwidth').textContent=(bytesReceived/1024).toFixed(1)+' KB/s';
-        bytesReceived=0;
-        lastBandwidthUpdate=now;
-      }
+    // 1) request an offer created inside the puppeteer page
+    const r = await fetch('/webrtc/offer');
+    if (!r.ok) {
+      const text = await r.text();
+      status.textContent = 'Offer request failed: ' + r.status;
+      throw new Error('Offer request failed: ' + text);
     }
+    const data = await r.json();
+    if (!data.success) {
+      status.textContent = 'Offer failed: ' + (data.error || 'unknown');
+      throw new Error('Offer failed: ' + (data.error || 'unknown'));
+    }
+
+    const remoteOffer = data.offer; // {sdp, type, candidates[]}
+    status.textContent = 'Received offer — creating local PC and answer…';
+
+    // 2) create local PC and set remote description (the offer is from the server page)
+    const pc = new RTCPeerConnection({
+      iceServers: []
+    });
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('pc ice state', pc.iceConnectionState);
+    };
+
+    pc.ontrack = (ev) => {
+      console.log('ontrack', ev);
+      // attach stream to video
+      remoteVideo.srcObject = ev.streams[0];
+      status.textContent = 'Playing';
+    };
+
+    // set remote (offer)
+    await pc.setRemoteDescription({ type: remoteOffer.type, sdp: remoteOffer.sdp });
+
+    // create answer
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    // wait a short time for local ICE candidates to gather (we're doing non-trickle)
+    await new Promise(r=>setTimeout(r, 500));
+
+    // 3) post answer back to server
+    status.textContent = 'Sending answer to server…';
+    const resp = await fetch('/webrtc/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer: pc.localDescription })
+    });
+
+    const respJson = await resp.json();
+    if (!resp.ok || !respJson.success) {
+      console.error('Answer post failed', await resp.text());
+      status.textContent = 'Answer post failed';
+      throw new Error('Answer post failed');
+    }
+
+    status.textContent = 'Connected (waiting for media)...';
+    return pc;
   }
 
-  ws.onclose=()=>{
-    document.getElementById('connectionStatus').classList.add('disconnected');
-    setTimeout(connect,2000);
+  try {
+    const pc = await negotiateWithServer();
+    // optional: handle clicks and pass to server HTTP endpoints as you had before
+    const videoEl = document.getElementById('remoteVideo');
+    videoEl.addEventListener('click', async (e) => {
+      const rect = videoEl.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (1280 / rect.width);
+      const y = (e.clientY - rect.top) * (720 / rect.height);
+      await fetch('/api/click', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ x, y }) });
+    });
+
+    document.getElementById('navigate').addEventListener('click', async () => {
+      const url = document.getElementById('urlInput').value;
+      await fetch('/api/navigate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ url }) });
+    });
+
+  } catch (err) {
+    console.error('WebRTC setup failed', err);
+    status.textContent = 'WebRTC failed: ' + (err.message || err);
   }
 
-  ws.onerror=(err)=>console.error(err);
-}
-
-document.getElementById('urlInput').addEventListener('keypress',e=>{
-  if(e.key==='Enter'){fetch('/api/navigate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:e.target.value})})}
-});
-
-['back','forward','refresh'].forEach(id=>{
-  document.getElementById(id+'Btn').addEventListener('click',()=>fetch('/api/'+id,{method:'POST'}));
-});
-
-document.getElementById('homeBtn').addEventListener('click',()=>fetch('/api/navigate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:'https://play.geforcenow.com'})}));
-
-connect();
+})();
 </script>
 </body>
 </html>
