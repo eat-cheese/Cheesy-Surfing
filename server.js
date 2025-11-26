@@ -35,23 +35,18 @@ async function initBrowser() {
 
     browser = await puppeteer.launch({
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      headless: false, // IMPORTANT: set false if getDisplayMedia is blocked in headless; try first with false
+      headless: true,
       args: [
+        '--headless=new',
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--window-size=1280,720',
-        // Screen capture / GPU flags — help with display capture & performance
-        '--enable-usermedia-screen-capturing',
-        '--allow-http-screen-capture',
-        '--enable-experimental-web-platform-features',
-        '--enable-gpu',
-        '--enable-accelerated-2d-canvas',
-        '--enable-gpu-rasterization',
-        '--ignore-gpu-blacklist',
-        '--use-gl=egl'
+        '--disable-web-security',
+        '--use-gl=swiftshader',
+        '--window-size=640,360'
       ]
     });
+
 
     page = await browser.newPage();
     // Keep viewport modest for performance; you can change
