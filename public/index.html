@@ -1,103 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Stream Browser</title>
+<style>
+  body{background:black;color:white;font-family:monospace}
+  #v{width:100%;height:90vh;background:#000}
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline></video>
+
 <script>
-const screen = document.getElementById('screen');
-const urlInput = document.getElementById('urlInput');
-const loading = document.getElementById('loading');
-const fpsCounter = document.getElementById('fps');
-const latencyCounter = document.getElementById('latency');
-const bandwidthCounter = document.getElementById('bandwidth');
-const connectionStatus = document.getElementById('connectionStatus');
+const video = document.getElementById("v");
+let pc = new RTCPeerConnection();
 
-let ws;
-let frameCount = 0;
-let bytes = 0;
-let lastStat = Date.now();
-let lastFrame = Date.now();
+let dc = pc.createDataChannel("input");
+dc.onopen = ()=>console.log("Input channel ready");
 
-function startWS(){
-  const proto = location.protocol === "https:" ? "wss://" : "ws://";
-  ws = new WebSocket(proto + location.host);
+document.addEventListener("keydown",e=>{
+  if(dc.readyState === "open"){
+    dc.send(JSON.stringify({type:"key",key:e.key}));
+  }
+});
 
-  ws.onopen = ()=>{
-    loading.classList.remove("active");
-    connectionStatus.classList.remove("disconnected");
-  };
-
-  ws.onmessage = (e)=>{
-    const msg = JSON.parse(e.data);
-    if(msg.type === "frame"){
-      screen.src = "data:image/jpeg;base64," + msg.data;
-      frameCount++;
-      bytes += msg.data.length;
-      const now = Date.now();
-
-      latencyCounter.textContent = (now - lastFrame) + "ms";
-      lastFrame = now;
-
-      if(now - lastStat >= 1000){
-        fpsCounter.textContent = frameCount;
-        bandwidthCounter.textContent = (bytes/1024).toFixed(1) + " KB/s";
-        frameCount = 0;
-        bytes = 0;
-        lastStat = now;
-      }
-    }
-  };
-
-  ws.onclose = ()=>{
-    connectionStatus.classList.add("disconnected");
-    setTimeout(startWS, 2000);
-  };
-}
-
-async function go(url){
-  loading.classList.add("active");
-  try{
-    const r = await fetch("/api/navigate",{
-      method:"POST",
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url})
-    });
-    const d = await r.json();
-    if(d.success) urlInput.value = d.url;
-  }catch{}
-  setTimeout(()=>loading.classList.remove("active"),500);
-}
-
-urlInput.onkeypress = e=> e.key==="Enter" && go(urlInput.value);
-screen.onclick = async e=>{
-  const r = screen.getBoundingClientRect();
-  const scaleX = 640/r.width;
-  const scaleY = 360/r.height;
-  const x = (e.clientX-r.left)*scaleX;
-  const y = (e.clientY-r.top)*scaleY;
-  try{ await fetch("/api/click",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({x,y})}); }catch{}
+pc.ontrack = e=>{
+  video.srcObject = e.streams[0];
 };
 
-screen.onwheel = async e=>{
-  e.preventDefault();
-  try{ await fetch("/api/scroll",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({deltaY:e.deltaY})}); }catch{}
+// signaling for WebRTC
+let ws = new WebSocket(location.protocol==="https:"?"wss://"+location.host:"ws://"+location.host);
+ws.onmessage = async e=>{
+  const msg = JSON.parse(e.data);
+  if(msg.type === "answer"){
+    await pc.setRemoteDescription({type:"answer",sdp:msg.sdp});
+  }
+  if(msg.type === "error"){
+    console.error(msg.message);
+  }
 };
 
-document.onkeydown = async e=>{
-  if(document.activeElement===urlInput) return;
-  e.preventDefault();
-  try{
-    if(e.key.length===1){
-      await fetch("/api/type",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({text:e.key})});
-    }else{
-      await fetch("/api/key",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({key:e.key})});
-    }
-  }catch{}
+ws.onopen = async()=>{
+  const offer = await pc.createOffer({offerToReceiveVideo:true});
+  await pc.setLocalDescription(offer);
+  ws.send(JSON.stringify({type:"offer",sdp:offer.sdp}));
 };
-
-document.getElementById('backBtn').onclick   = ()=>fetch("/api/back",{method:"POST"}).then(updateURL);
-document.getElementById('forwardBtn').onclick= ()=>fetch("/api/forward",{method:"POST"}).then(updateURL);
-document.getElementById('refreshBtn').onclick= ()=>fetch("/api/refresh",{method:"POST"});
-
-async function updateURL(){
-  try{ const r = await fetch("/api/url"); const d = await r.json(); if(d.success) urlInput.value = d.url; }catch{}
-}
-
-startWS();
-updateURL();
 </script>
+</body>
+</html>
