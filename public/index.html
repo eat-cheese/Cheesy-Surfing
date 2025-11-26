@@ -1,418 +1,120 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Virtual Browser - 6660 FPS</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #111827;
-      height: 100vh;
-      overflow: hidden;
-    }
-
-    .browser-container {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-    }
-
-    .toolbar {
-      background: #1f2937;
-      padding: 12px;
-      border-bottom: 1px solid #374151;
-    }
-
-    .nav-bar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .nav-btn {
-      padding: 8px 12px;
-      background: #374151;
-      border: none;
-      border-radius: 6px;
-      color: #d1d5db;
-      cursor: pointer;
-      font-size: 14px;
-      transition: background 0.2s;
-      white-space: nowrap;
-    }
-
-    .nav-btn:hover {
-      background: #4b5563;
-    }
-
-    .url-bar {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      background: #374151;
-      border-radius: 6px;
-      padding: 8px 12px;
-      gap: 8px;
-    }
-
-    .url-input {
-      flex: 1;
-      background: transparent;
-      border: none;
-      color: #f3f4f6;
-      outline: none;
-      font-size: 14px;
-    }
-
-    .status {
-      background: #1e3a8a;
-      border: 1px solid #1e40af;
-      border-radius: 6px;
-      padding: 8px 12px;
-      color: #bfdbfe;
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .stat {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      background: #374151;
-      padding: 4px 10px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-    }
-
-    .stat-label {
-      color: #9ca3af;
-    }
-
-    .stat-value {
-      color: #34d399;
-      font-weight: bold;
-    }
-
-    .viewport {
-      flex: 1;
-      background: #000;
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    #screen {
-      max-width: 100%;
-      max-height: 100%;
-      cursor: crosshair;
-      image-rendering: optimizeSpeed;
-    }
-
-    .loading {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: #1f2937;
-      padding: 20px 30px;
-      border-radius: 8px;
-      color: #e5e7eb;
-      display: none;
-    }
-
-    .loading.active {
-      display: block;
-    }
-
-    .spinner {
-      display: inline-block;
-      width: 20px;
-      height: 20px;
-      border: 3px solid #374151;
-      border-top-color: #60a5fa;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin-right: 10px;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .connection-status {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #34d399;
-      animation: pulse 2s infinite;
-    }
-
-    .connection-status.disconnected {
-      background: #ef4444;
-      animation: none;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtual Browser</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111827;height:100vh;overflow:hidden}
+.browser-container{display:flex;flex-direction:column;height:100vh}
+.toolbar{background:#1f2937;padding:12px;border-bottom:1px solid #374151}
+.nav-bar{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.nav-btn{padding:8px 12px;background:#374151;border:none;border-radius:6px;color:#d1d5db;cursor:pointer;font-size:14px;white-space:nowrap}
+.nav-btn:hover{background:#4b5563}
+.url-bar{flex:1;display:flex;align-items:center;background:#374151;border-radius:6px;padding:8px 12px;gap:8px}
+.url-input{flex:1;background:0;border:0;color:#fff;outline:0;font-size:14px}
+.status{background:#1e3a8a;border:1px solid #1e40af;border-radius:6px;padding:8px 12px;color:#bfdbfe;font-size:13px;display:flex;align-items:center;gap:12px}
+.stat{background:#374151;padding:4px 10px;border-radius:4px;font-family:monospace;font-size:12px;color:#34d399}
+.viewport{flex:1;background:#000;display:flex;align-items:center;justify-content:center;position:relative}
+#screen{max-width:100%;max-height:100%;cursor:crosshair}
+.spinner{display:inline-block;width:20px;height:20px;border:3px solid #374151;border-top-color:#60a5fa;border-radius:50%;animation:spin 1s linear infinite;margin-right:10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.connection-dot{width:10px;height:10px;border-radius:50%;background:#34d399}
+.connection-dot.disconnected{background:#ef4444}
+.loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#1f2937;padding:20px 30px;border-radius:8px;color:#fff}
+</style>
 </head>
 <body>
-  <div class="browser-container">
-    <div class="toolbar">
-      <div class="nav-bar">
-        <button class="nav-btn" id="backBtn">← Back</button>
-        <button class="nav-btn" id="forwardBtn">Forward →</button>
-        <button class="nav-btn" id="refreshBtn">⟳ Refresh</button>
-        <button class="nav-btn" id="homeBtn">🏠 Home</button>
-        
-        <div class="url-bar">
-          <span style="color: #34d399">🔒</span>
-          <input type="text" class="url-input" id="urlInput" placeholder="Enter URL..." value="https://play.geforcenow.com">
-          <span style="color: #9ca3af">🌐</span>
-        </div>
-      </div>
-      
-      <div class="status">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <div class="connection-status" id="connectionStatus"></div>
-          <strong>30 FPS Streaming Browser</strong>
-        </div>
-        <div class="stat">
-          <span class="stat-label">FPS:</span>
-          <span class="stat-value" id="fps">0</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Latency:</span>
-          <span class="stat-value" id="latency">0ms</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Bandwidth:</span>
-          <span class="stat-value" id="bandwidth">0 KB/s</span>
-        </div>
+<div class="browser-container">
+  <div class="toolbar">
+    <div class="nav-bar">
+      <button class="nav-btn" id="backBtn">← Back</button>
+      <button class="nav-btn" id="forwardBtn">Forward →</button>
+      <button class="nav-btn" id="refreshBtn">⟳ Refresh</button>
+      <button class="nav-btn" id="homeBtn">🏠 Home</button>
+      <div class="url-bar">
+        <input class="url-input" id="urlInput" value="https://play.geforcenow.com" placeholder="Enter URL...">
       </div>
     </div>
-
-    <div class="viewport">
-      <img id="screen" alt="Browser screen">
-      <div class="loading active" id="loading">
-        <span class="spinner"></span>
-        Connecting...
+    <div class="status">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div id="connectionStatus" class="connection-dot"></div>
+        <strong>Cheesy Surfing Streaming Browser</strong>
       </div>
+      <div class="stat">FPS: <span id="fps">0</span></div>
+      <div class="stat">Latency: <span id="latency">0ms</span></div>
+      <div class="stat">Bandwidth: <span id="bandwidth">0 KB/s</span></div>
     </div>
   </div>
+  <div class="viewport">
+    <img id="screen">
+    <div class="loading" id="loading"><span class="spinner"></span>Connecting...</div>
+  </div>
+</div>
 
-  <script>
-    const screen = document.getElementById('screen');
-    const urlInput = document.getElementById('urlInput');
-    const loading = document.getElementById('loading');
-    const fpsCounter = document.getElementById('fps');
-    const latencyCounter = document.getElementById('latency');
-    const bandwidthCounter = document.getElementById('bandwidth');
-    const connectionStatus = document.getElementById('connectionStatus');
-    
-    let ws = null;
-    let frameCount = 0;
-    let lastFpsUpdate = Date.now();
-    let bytesReceived = 0;
-    let lastBandwidthUpdate = Date.now();
-    let lastFrameTime = Date.now();
+<script>
+let ws;
+let frameCount=0,lastFpsUpdate=performance.now();
+let bytesReceived=0,lastBandwidthUpdate=performance.now();
+let lastFrameTime=performance.now();
 
-    // WebSocket connection
-    function connect() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${protocol}//${window.location.host}`);
+function connect(){
+  const protocol=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(protocol+'//'+location.host);
+  ws.binaryType='arraybuffer';
 
-      ws.onopen = () => {
-        console.log('Connected to stream');
-        loading.classList.remove('active');
-        connectionStatus.classList.remove('disconnected');
-      };
+  ws.onopen=()=>{
+    document.getElementById('loading').style.display='none';
+    document.getElementById('connectionStatus').classList.remove('disconnected');
+  }
 
-      ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        
-        if (message.type === 'frame') {
-          screen.src = `data:image/jpeg;base64,${message.data}`;
-          
-          // Calculate stats
-          frameCount++;
-          bytesReceived += message.data.length;
-          
-          const now = Date.now();
-          const latency = now - lastFrameTime;
-          lastFrameTime = now;
-          
-          // Update FPS
-          if (now - lastFpsUpdate >= 1000) {
-            fpsCounter.textContent = frameCount;
-            frameCount = 0;
-            lastFpsUpdate = now;
-          }
-          
-          // Update bandwidth
-          if (now - lastBandwidthUpdate >= 1000) {
-            const kbps = (bytesReceived / 1024).toFixed(1);
-            bandwidthCounter.textContent = `${kbps} KB/s`;
-            bytesReceived = 0;
-            lastBandwidthUpdate = now;
-          }
-          
-          // Update latency
-          latencyCounter.textContent = `${latency}ms`;
-        }
-      };
+  ws.onmessage=(event)=>{
+    if(event.data instanceof ArrayBuffer){
+      const blob=new Blob([event.data],{type:'image/jpeg'});
+      const url=URL.createObjectURL(blob);
+      const img=document.getElementById('screen');
+      img.onload=()=>URL.revokeObjectURL(url);
+      img.src=url;
 
-      ws.onclose = () => {
-        console.log('Disconnected, reconnecting...');
-        connectionStatus.classList.add('disconnected');
-        setTimeout(connect, 2000);
-      };
+      const now=performance.now();
+      document.getElementById('latency').textContent=Math.round(now-lastFrameTime)+'ms';
+      lastFrameTime=now;
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-      };
-    }
-
-    // Navigate to URL
-    async function navigate(url) {
-      loading.classList.add('active');
-      try {
-        const response = await fetch('/api/navigate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
-        });
-        const data = await response.json();
-        if (data.success) {
-          await updateCurrentUrl();
-        }
-      } catch (error) {
-        console.error('Navigation error:', error);
-      } finally {
-        setTimeout(() => loading.classList.remove('active'), 500);
+      frameCount++;
+      bytesReceived+=event.data.byteLength;
+      if(now-lastFpsUpdate>=1000){
+        document.getElementById('fps').textContent=frameCount;
+        frameCount=0;
+        lastFpsUpdate=now;
+      }
+      if(now-lastBandwidthUpdate>=1000){
+        document.getElementById('bandwidth').textContent=(bytesReceived/1024).toFixed(1)+' KB/s';
+        bytesReceived=0;
+        lastBandwidthUpdate=now;
       }
     }
+  }
 
-    // Get current URL
-    async function updateCurrentUrl() {
-      try {
-        const response = await fetch('/api/url');
-        const data = await response.json();
-        if (data.success) {
-          urlInput.value = data.url;
-        }
-      } catch (error) {
-        console.error('URL error:', error);
-      }
-    }
+  ws.onclose=()=>{
+    document.getElementById('connectionStatus').classList.add('disconnected');
+    setTimeout(connect,2000);
+  }
 
-    // Click on screen
-    screen.addEventListener('click', async (e) => {
-      const rect = screen.getBoundingClientRect();
-      const scaleX = 1280 / rect.width;
-      const scaleY = 720 / rect.height;
-      const x = (e.clientX - rect.left) * scaleX;
-      const y = (e.clientY - rect.top) * scaleY;
+  ws.onerror=(err)=>console.error(err);
+}
 
-      try {
-        await fetch('/api/click', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x, y })
-        });
-      } catch (error) {
-        console.error('Click error:', error);
-      }
-    });
+document.getElementById('urlInput').addEventListener('keypress',e=>{
+  if(e.key==='Enter'){fetch('/api/navigate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:e.target.value})})}
+});
 
-    // Mouse wheel for scrolling
-    screen.addEventListener('wheel', async (e) => {
-      e.preventDefault();
-      try {
-        await fetch('/api/scroll', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deltaY: e.deltaY })
-        });
-      } catch (error) {
-        console.error('Scroll error:', error);
-      }
-    });
+['back','forward','refresh'].forEach(id=>{
+  document.getElementById(id+'Btn').addEventListener('click',()=>fetch('/api/'+id,{method:'POST'}));
+});
 
-    // Keyboard support
-    document.addEventListener('keydown', async (e) => {
-      if (document.activeElement === urlInput) return;
-      
-      e.preventDefault();
-      try {
-        if (e.key.length === 1) {
-          await fetch('/api/type', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: e.key })
-          });
-        } else {
-          await fetch('/api/key', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: e.key })
-          });
-        }
-      } catch (error) {
-        console.error('Key error:', error);
-      }
-    });
+document.getElementById('homeBtn').addEventListener('click',()=>fetch('/api/navigate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:'https://play.geforcenow.com'})}));
 
-    // URL bar
-    urlInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        navigate(urlInput.value);
-      }
-    });
-
-    // Navigation buttons
-    document.getElementById('backBtn').addEventListener('click', async () => {
-      loading.classList.add('active');
-      await fetch('/api/back', { method: 'POST' });
-      await updateCurrentUrl();
-      setTimeout(() => loading.classList.remove('active'), 500);
-    });
-
-    document.getElementById('forwardBtn').addEventListener('click', async () => {
-      loading.classList.add('active');
-      await fetch('/api/forward', { method: 'POST' });
-      await updateCurrentUrl();
-      setTimeout(() => loading.classList.remove('active'), 500);
-    });
-
-    document.getElementById('refreshBtn').addEventListener('click', async () => {
-      loading.classList.add('active');
-      await fetch('/api/refresh', { method: 'POST' });
-      setTimeout(() => loading.classList.remove('active'), 500);
-    });
-
-    document.getElementById('homeBtn').addEventListener('click', () => {
-      navigate('https://play.geforcenow.com');
-    });
-
-    // Initialize
-    connect();
-    updateCurrentUrl();
-  </script>
+connect();
+</script>
 </body>
 </html>
