@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Virtual Browser</title>
+  <title>Virtual Browser - 60 FPS</title>
   <style>
     * {
       margin: 0;
@@ -46,15 +46,11 @@
       cursor: pointer;
       font-size: 14px;
       transition: background 0.2s;
+      white-space: nowrap;
     }
 
     .nav-btn:hover {
       background: #4b5563;
-    }
-
-    .nav-btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
     }
 
     .url-bar {
@@ -76,10 +72,6 @@
       font-size: 14px;
     }
 
-    .lock-icon {
-      color: #34d399;
-    }
-
     .status {
       background: #1e3a8a;
       border: 1px solid #1e40af;
@@ -89,15 +81,27 @@
       font-size: 13px;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
     }
 
-    .fps-counter {
-      margin-left: auto;
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       background: #374151;
-      padding: 4px 8px;
+      padding: 4px 10px;
       border-radius: 4px;
       font-family: monospace;
+      font-size: 12px;
+    }
+
+    .stat-label {
+      color: #9ca3af;
+    }
+
+    .stat-value {
+      color: #34d399;
+      font-weight: bold;
     }
 
     .viewport {
@@ -105,13 +109,16 @@
       background: #000;
       position: relative;
       overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     #screen {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
+      max-width: 100%;
+      max-height: 100%;
       cursor: crosshair;
+      image-rendering: optimizeSpeed;
     }
 
     .loading {
@@ -144,6 +151,24 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    .connection-status {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #34d399;
+      animation: pulse 2s infinite;
+    }
+
+    .connection-status.disconnected {
+      background: #ef4444;
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
   </style>
 </head>
 <body>
@@ -156,23 +181,37 @@
         <button class="nav-btn" id="homeBtn">🏠 Home</button>
         
         <div class="url-bar">
-          <span class="lock-icon">🔒</span>
+          <span style="color: #34d399">🔒</span>
           <input type="text" class="url-input" id="urlInput" placeholder="Enter URL..." value="https://play.geforcenow.com">
-          <span>🌐</span>
+          <span style="color: #9ca3af">🌐</span>
         </div>
       </div>
       
       <div class="status">
-        <strong>Real Browser Server</strong> - Virtual Browser
-        <span class="fps-counter" id="fps">FPS: 0</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div class="connection-status" id="connectionStatus"></div>
+          <strong>60 FPS Streaming Browser</strong>
+        </div>
+        <div class="stat">
+          <span class="stat-label">FPS:</span>
+          <span class="stat-value" id="fps">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Latency:</span>
+          <span class="stat-value" id="latency">0ms</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Bandwidth:</span>
+          <span class="stat-value" id="bandwidth">0 KB/s</span>
+        </div>
       </div>
     </div>
 
     <div class="viewport">
       <img id="screen" alt="Browser screen">
-      <div class="loading" id="loading">
+      <div class="loading active" id="loading">
         <span class="spinner"></span>
-        Loading...
+        Connecting...
       </div>
     </div>
   </div>
@@ -182,47 +221,76 @@
     const urlInput = document.getElementById('urlInput');
     const loading = document.getElementById('loading');
     const fpsCounter = document.getElementById('fps');
-    let isLoading = false;
+    const latencyCounter = document.getElementById('latency');
+    const bandwidthCounter = document.getElementById('bandwidth');
+    const connectionStatus = document.getElementById('connectionStatus');
+    
+    let ws = null;
     let frameCount = 0;
     let lastFpsUpdate = Date.now();
+    let bytesReceived = 0;
+    let lastBandwidthUpdate = Date.now();
+    let lastFrameTime = Date.now();
 
-    // Show loading
-    function showLoading() {
-      isLoading = true;
-      loading.classList.add('active');
-    }
+    // WebSocket connection
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
 
-    // Hide loading
-    function hideLoading() {
-      isLoading = false;
-      loading.classList.remove('active');
-    }
+      ws.onopen = () => {
+        console.log('Connected to stream');
+        loading.classList.remove('active');
+        connectionStatus.classList.remove('disconnected');
+      };
 
-    // Update screenshot
-    async function updateScreen() {
-      try {
-        const response = await fetch('/api/screenshot');
-        const data = await response.json();
-        if (data.success) {
-          screen.src = data.screenshot;
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'frame') {
+          screen.src = `data:image/jpeg;base64,${message.data}`;
           
-          // Update FPS counter
+          // Calculate stats
           frameCount++;
+          bytesReceived += message.data.length;
+          
           const now = Date.now();
+          const latency = now - lastFrameTime;
+          lastFrameTime = now;
+          
+          // Update FPS
           if (now - lastFpsUpdate >= 1000) {
-            fpsCounter.textContent = `FPS: ${frameCount}`;
+            fpsCounter.textContent = frameCount;
             frameCount = 0;
             lastFpsUpdate = now;
           }
+          
+          // Update bandwidth
+          if (now - lastBandwidthUpdate >= 1000) {
+            const kbps = (bytesReceived / 1024).toFixed(1);
+            bandwidthCounter.textContent = `${kbps} KB/s`;
+            bytesReceived = 0;
+            lastBandwidthUpdate = now;
+          }
+          
+          // Update latency
+          latencyCounter.textContent = `${latency}ms`;
         }
-      } catch (error) {
-        console.error('Screenshot error:', error);
-      }
+      };
+
+      ws.onclose = () => {
+        console.log('Disconnected, reconnecting...');
+        connectionStatus.classList.add('disconnected');
+        setTimeout(connect, 2000);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
     }
 
     // Navigate to URL
     async function navigate(url) {
-      showLoading();
+      loading.classList.add('active');
       try {
         const response = await fetch('/api/navigate', {
           method: 'POST',
@@ -232,12 +300,11 @@
         const data = await response.json();
         if (data.success) {
           await updateCurrentUrl();
-          await updateScreen();
         }
       } catch (error) {
         console.error('Navigation error:', error);
       } finally {
-        hideLoading();
+        setTimeout(() => loading.classList.remove('active'), 500);
       }
     }
 
@@ -254,11 +321,11 @@
       }
     }
 
-    // Click on screen (with immediate feedback)
+    // Click on screen
     screen.addEventListener('click', async (e) => {
       const rect = screen.getBoundingClientRect();
-      const scaleX = 1920 / rect.width;
-      const scaleY = 1080 / rect.height;
+      const scaleX = 1280 / rect.width;
+      const scaleY = 720 / rect.height;
       const x = (e.clientX - rect.left) * scaleX;
       const y = (e.clientY - rect.top) * scaleY;
 
@@ -268,10 +335,46 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ x, y })
         });
-        // Update immediately after click
-        setTimeout(updateScreen, 100);
       } catch (error) {
         console.error('Click error:', error);
+      }
+    });
+
+    // Mouse wheel for scrolling
+    screen.addEventListener('wheel', async (e) => {
+      e.preventDefault();
+      try {
+        await fetch('/api/scroll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deltaY: e.deltaY })
+        });
+      } catch (error) {
+        console.error('Scroll error:', error);
+      }
+    });
+
+    // Keyboard support
+    document.addEventListener('keydown', async (e) => {
+      if (document.activeElement === urlInput) return;
+      
+      e.preventDefault();
+      try {
+        if (e.key.length === 1) {
+          await fetch('/api/type', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: e.key })
+          });
+        } else {
+          await fetch('/api/key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: e.key })
+          });
+        }
+      } catch (error) {
+        console.error('Key error:', error);
       }
     });
 
@@ -284,41 +387,31 @@
 
     // Navigation buttons
     document.getElementById('backBtn').addEventListener('click', async () => {
-      showLoading();
+      loading.classList.add('active');
       await fetch('/api/back', { method: 'POST' });
       await updateCurrentUrl();
-      await updateScreen();
-      hideLoading();
+      setTimeout(() => loading.classList.remove('active'), 500);
     });
 
     document.getElementById('forwardBtn').addEventListener('click', async () => {
-      showLoading();
+      loading.classList.add('active');
       await fetch('/api/forward', { method: 'POST' });
       await updateCurrentUrl();
-      await updateScreen();
-      hideLoading();
+      setTimeout(() => loading.classList.remove('active'), 500);
     });
 
     document.getElementById('refreshBtn').addEventListener('click', async () => {
-      showLoading();
+      loading.classList.add('active');
       await fetch('/api/refresh', { method: 'POST' });
-      await updateScreen();
-      hideLoading();
+      setTimeout(() => loading.classList.remove('active'), 500);
     });
 
     document.getElementById('homeBtn').addEventListener('click', () => {
       navigate('https://play.geforcenow.com');
     });
 
-    // Auto-refresh screen - much faster!
-    setInterval(() => {
-      if (!isLoading) {
-        updateScreen();
-      }
-    }, 33); // Update every 100ms instead of 1000ms
-
-    // Initial load
-    updateScreen();
+    // Initialize
+    connect();
     updateCurrentUrl();
   </script>
 </body>

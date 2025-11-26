@@ -1,8 +1,9 @@
 import express from 'express';
 import puppeteer from 'puppeteer-core';
 import { WebSocketServer } from 'ws';
+import sharp from 'sharp';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -15,6 +16,7 @@ app.use(express.static('public'));
 
 let browser = null;
 let page = null;
+let previousScreenshot = null;
 
 // Initialize browser
 async function initBrowser() {
@@ -27,17 +29,56 @@ async function initBrowser() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--window-size=1920,1080'
+        '--window-size=1280,720',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process'
       ]
     });
     page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.goto('https://play.geforcenow.com', { waitUntil: 'networkidle2' });
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.goto('https://play.geforcenow.com', { waitUntil: 'domcontentloaded' });
   }
   return { browser, page };
 }
 
-// API endpoint to navigate
+// Get optimized screenshot with change detection
+async function getOptimizedScreenshot() {
+  try {
+    const { page } = await initBrowser();
+    
+    // Take screenshot as buffer
+    const screenshot = await page.screenshot({ 
+      type: 'jpeg',
+      quality: 50,
+      optimizeForSpeed: true
+    });
+
+    // Compress further with sharp
+    const compressed = await sharp(screenshot)
+      .resize(1280, 720, { fit: 'contain' })
+      .jpeg({ quality: 45, mozjpeg: true })
+      .toBuffer();
+
+    // Check if image changed significantly
+    if (previousScreenshot) {
+      const diff = Buffer.compare(
+        compressed.slice(0, 1000), 
+        previousScreenshot.slice(0, 1000)
+      );
+      if (diff === 0) {
+        return null; // No change, don't send
+      }
+    }
+
+    previousScreenshot = compressed;
+    return compressed.toString('base64');
+  } catch (error) {
+    console.error('Screenshot error:', error);
+    return null;
+  }
+}
+
+// API endpoints
 app.post('/api/navigate', async (req, res) => {
   try {
     const { url } = req.body;
@@ -48,42 +89,26 @@ app.post('/api/navigate', async (req, res) => {
       finalUrl = 'https://' + url;
     }
     
-    await page.goto(finalUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    previousScreenshot = null; // Force update
     res.json({ success: true, url: finalUrl });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API endpoint to get screenshot (optimized for speed)
-app.get('/api/screenshot', async (req, res) => {
-  try {
-    const { page } = await initBrowser();
-    const screenshot = await page.screenshot({ 
-      encoding: 'base64', 
-      type: 'jpeg', 
-      quality: 60,  // Lower quality for faster updates
-      optimizeForSpeed: true
-    });
-    res.json({ success: true, screenshot: `data:image/jpeg;base64,${screenshot}` });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// API endpoint to click
 app.post('/api/click', async (req, res) => {
   try {
     const { x, y } = req.body;
     const { page } = await initBrowser();
     await page.mouse.click(x, y);
+    previousScreenshot = null; // Force update after interaction
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API endpoint to type
 app.post('/api/type', async (req, res) => {
   try {
     const { text } = req.body;
@@ -95,7 +120,6 @@ app.post('/api/type', async (req, res) => {
   }
 });
 
-// API endpoint to press key
 app.post('/api/key', async (req, res) => {
   try {
     const { key } = req.body;
@@ -107,40 +131,52 @@ app.post('/api/key', async (req, res) => {
   }
 });
 
-// API endpoint to go back
+app.post('/api/scroll', async (req, res) => {
+  try {
+    const { deltaY } = req.body;
+    const { page } = await initBrowser();
+    await page.evaluate((delta) => {
+      window.scrollBy(0, delta);
+    }, deltaY);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.post('/api/back', async (req, res) => {
   try {
     const { page } = await initBrowser();
-    await page.goBack({ waitUntil: 'networkidle2' });
+    await page.goBack({ waitUntil: 'domcontentloaded' });
+    previousScreenshot = null;
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API endpoint to go forward
 app.post('/api/forward', async (req, res) => {
   try {
     const { page } = await initBrowser();
-    await page.goForward({ waitUntil: 'networkidle2' });
+    await page.goForward({ waitUntil: 'domcontentloaded' });
+    previousScreenshot = null;
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API endpoint to refresh
 app.post('/api/refresh', async (req, res) => {
   try {
     const { page } = await initBrowser();
-    await page.reload({ waitUntil: 'networkidle2' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    previousScreenshot = null;
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API endpoint to get current URL
 app.get('/api/url', async (req, res) => {
   try {
     const { page } = await initBrowser();
@@ -158,10 +194,45 @@ const server = app.listen(PORT, () => {
   });
 });
 
-// Cleanup on exit
+// WebSocket for streaming
+const wss = new WebSocketServer({ server });
+
+wss.on('connection', (ws) => {
+  console.log('Client connected');
+  let streaming = true;
+
+  // Stream screenshots at 60 FPS
+  const streamInterval = setInterval(async () => {
+    if (!streaming) return;
+    
+    try {
+      const screenshot = await getOptimizedScreenshot();
+      if (screenshot && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'frame',
+          data: screenshot
+        }));
+      }
+    } catch (error) {
+      console.error('Stream error:', error);
+    }
+  }, 16); // ~60 FPS (1000ms / 60 = 16.67ms)
+
+  ws.on('close', () => {
+    streaming = false;
+    clearInterval(streamInterval);
+    console.log('Client disconnected');
+  });
+
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
+    streaming = false;
+    clearInterval(streamInterval);
+  });
+});
+
+// Cleanup
 process.on('SIGINT', async () => {
-  if (browser) {
-    await browser.close();
-  }
+  if (browser) await browser.close();
   process.exit();
 });
