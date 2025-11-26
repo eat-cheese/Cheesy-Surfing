@@ -1,119 +1,103 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Cheesy Browser (WebRTC viewer)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    body{margin:0;background:#111;color:#eee;font-family:sans-serif}
-    .toolbar{padding:12px;background:#1f2937;display:flex;gap:8px;align-items:center}
-    .viewport{height:calc(100vh - 64px);display:flex;align-items:center;justify-content:center;background:#000}
-    video{max-width:100%;max-height:100%;background:#000}
-    .loading{position:absolute;color:#fff}
-  </style>
-</head>
-<body>
-  <div class="toolbar">
-    <input id="urlInput" style="flex:1;padding:8px;border-radius:6px;border:0;background:#c0b846;color:#fff" value="https://play.geforcenow.com">
-    <button id="navigate">Go</button>
-    <div id="status" style="margin-left:12px">Connecting WebRTC…</div>
-  </div>
-
-  <div class="viewport">
-    <video id="remoteVideo" autoplay playsinline></video>
-  </div>
-
 <script>
-(async function () {
-  const status = document.getElementById('status');
-  const remoteVideo = document.getElementById('remoteVideo');
+const screen = document.getElementById('screen');
+const urlInput = document.getElementById('urlInput');
+const loading = document.getElementById('loading');
+const fpsCounter = document.getElementById('fps');
+const latencyCounter = document.getElementById('latency');
+const bandwidthCounter = document.getElementById('bandwidth');
+const connectionStatus = document.getElementById('connectionStatus');
 
-  async function negotiateWithServer() {
-    status.textContent = 'Requesting offer from server…';
+let ws;
+let frameCount = 0;
+let bytes = 0;
+let lastStat = Date.now();
+let lastFrame = Date.now();
 
-    // 1) request an offer created inside the puppeteer page
-    const r = await fetch('/webrtc/offer');
-    if (!r.ok) {
-      const text = await r.text();
-      status.textContent = 'Offer request failed: ' + r.status;
-      throw new Error('Offer request failed: ' + text);
+function startWS(){
+  const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  ws = new WebSocket(proto + location.host);
+
+  ws.onopen = ()=>{
+    loading.classList.remove("active");
+    connectionStatus.classList.remove("disconnected");
+  };
+
+  ws.onmessage = (e)=>{
+    const msg = JSON.parse(e.data);
+    if(msg.type === "frame"){
+      screen.src = "data:image/jpeg;base64," + msg.data;
+      frameCount++;
+      bytes += msg.data.length;
+      const now = Date.now();
+
+      latencyCounter.textContent = (now - lastFrame) + "ms";
+      lastFrame = now;
+
+      if(now - lastStat >= 1000){
+        fpsCounter.textContent = frameCount;
+        bandwidthCounter.textContent = (bytes/1024).toFixed(1) + " KB/s";
+        frameCount = 0;
+        bytes = 0;
+        lastStat = now;
+      }
     }
-    const data = await r.json();
-    if (!data.success) {
-      status.textContent = 'Offer failed: ' + (data.error || 'unknown');
-      throw new Error('Offer failed: ' + (data.error || 'unknown'));
+  };
+
+  ws.onclose = ()=>{
+    connectionStatus.classList.add("disconnected");
+    setTimeout(startWS, 2000);
+  };
+}
+
+async function go(url){
+  loading.classList.add("active");
+  try{
+    const r = await fetch("/api/navigate",{
+      method:"POST",
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url})
+    });
+    const d = await r.json();
+    if(d.success) urlInput.value = d.url;
+  }catch{}
+  setTimeout(()=>loading.classList.remove("active"),500);
+}
+
+urlInput.onkeypress = e=> e.key==="Enter" && go(urlInput.value);
+screen.onclick = async e=>{
+  const r = screen.getBoundingClientRect();
+  const scaleX = 640/r.width;
+  const scaleY = 360/r.height;
+  const x = (e.clientX-r.left)*scaleX;
+  const y = (e.clientY-r.top)*scaleY;
+  try{ await fetch("/api/click",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({x,y})}); }catch{}
+};
+
+screen.onwheel = async e=>{
+  e.preventDefault();
+  try{ await fetch("/api/scroll",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({deltaY:e.deltaY})}); }catch{}
+};
+
+document.onkeydown = async e=>{
+  if(document.activeElement===urlInput) return;
+  e.preventDefault();
+  try{
+    if(e.key.length===1){
+      await fetch("/api/type",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({text:e.key})});
+    }else{
+      await fetch("/api/key",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({key:e.key})});
     }
+  }catch{}
+};
 
-    const remoteOffer = data.offer; // {sdp, type, candidates[]}
-    status.textContent = 'Received offer — creating local PC and answer…';
+document.getElementById('backBtn').onclick   = ()=>fetch("/api/back",{method:"POST"}).then(updateURL);
+document.getElementById('forwardBtn').onclick= ()=>fetch("/api/forward",{method:"POST"}).then(updateURL);
+document.getElementById('refreshBtn').onclick= ()=>fetch("/api/refresh",{method:"POST"});
 
-    // 2) create local PC and set remote description (the offer is from the server page)
-    const pc = new RTCPeerConnection({
-      iceServers: []
-    });
+async function updateURL(){
+  try{ const r = await fetch("/api/url"); const d = await r.json(); if(d.success) urlInput.value = d.url; }catch{}
+}
 
-    pc.oniceconnectionstatechange = () => {
-      console.log('pc ice state', pc.iceConnectionState);
-    };
-
-    pc.ontrack = (ev) => {
-      console.log('ontrack', ev);
-      // attach stream to video
-      remoteVideo.srcObject = ev.streams[0];
-      status.textContent = 'Playing';
-    };
-
-    // set remote (offer)
-    await pc.setRemoteDescription({ type: remoteOffer.type, sdp: remoteOffer.sdp });
-
-    // create answer
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    // wait a short time for local ICE candidates to gather (we're doing non-trickle)
-    await new Promise(r=>setTimeout(r, 500));
-
-    // 3) post answer back to server
-    status.textContent = 'Sending answer to server…';
-    const resp = await fetch('/webrtc/answer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answer: pc.localDescription })
-    });
-
-    const respJson = await resp.json();
-    if (!resp.ok || !respJson.success) {
-      console.error('Answer post failed', await resp.text());
-      status.textContent = 'Answer post failed';
-      throw new Error('Answer post failed');
-    }
-
-    status.textContent = 'Connected (waiting for media)...';
-    return pc;
-  }
-
-  try {
-    const pc = await negotiateWithServer();
-    // optional: handle clicks and pass to server HTTP endpoints as you had before
-    const videoEl = document.getElementById('remoteVideo');
-    videoEl.addEventListener('click', async (e) => {
-      const rect = videoEl.getBoundingClientRect();
-      const x = (e.clientX - rect.left) * (1280 / rect.width);
-      const y = (e.clientY - rect.top) * (720 / rect.height);
-      await fetch('/api/click', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ x, y }) });
-    });
-
-    document.getElementById('navigate').addEventListener('click', async () => {
-      const url = document.getElementById('urlInput').value;
-      await fetch('/api/navigate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ url }) });
-    });
-
-  } catch (err) {
-    console.error('WebRTC setup failed', err);
-    status.textContent = 'WebRTC failed: ' + (err.message || err);
-  }
-
-})();
+startWS();
+updateURL();
 </script>
-</body>
-</html>

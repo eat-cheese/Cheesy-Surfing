@@ -1,37 +1,41 @@
 import express from 'express';
 import puppeteer from 'puppeteer-core';
-import bodyParser from 'body-parser';
-import path from 'path';
+import { WebSocketServer } from 'ws';
+import sharp from 'sharp';
 import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(bodyParser.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+app.use(express.static('public'));
 
-// Puppeteer globals
 let browser = null;
 let page = null;
+let previousScreenshot = null;
 let isInitializing = false;
 
+// Initialize browser safely (NO GUI ATTEMPT)
 async function initBrowser() {
-  // Avoid races
   while (isInitializing) {
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
-  if (browser && page && !page.isClosed()) return { browser, page };
 
   try {
-    isInitializing = true;
-    if (browser) {
-      try { await browser.close(); } catch (e) { console.warn('Error closing old browser:', e.message); }
+    if (browser && page && !page.isClosed()) {
+      return { browser, page };
     }
 
-    console.log('Launching Chromium...');
+    isInitializing = true;
+    console.log('Initializing browser...');
+
+    if (browser) {
+      try { await browser.close(); } catch {}
+    }
 
     browser = await puppeteer.launch({
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
@@ -41,211 +45,171 @@ async function initBrowser() {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--mute-audio',
+        '--window-size=640,360', // lighter resolution for CPU hosts
         '--disable-web-security',
-        '--use-gl=swiftshader',
-        '--window-size=640,360'
+        '--single-process',
+        '--no-zygote'
       ]
     });
 
-
     page = await browser.newPage();
-    // Keep viewport modest for performance; you can change
-    await page.setViewport({ width: 1280, height: 720 });
+    await page.setViewport({ width: 640, height: 360 });
 
-    // Navigate to an empty page (we'll reuse it)
-    await page.goto('about:blank');
+    page.setDefaultTimeout(10000);
 
-    console.log('Chromium launched and page ready');
+    await page.goto('https://google.com', {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000
+    }).catch(() => {});
+
+    console.log('Browser initialized');
     isInitializing = false;
     return { browser, page };
-  } catch (err) {
+
+  } catch (error) {
     isInitializing = false;
-    console.error('initBrowser error:', err);
     browser = null;
     page = null;
-    throw err;
+    previousScreenshot = null;
+    throw error;
   }
 }
 
-// Helper: evaluate the sender-bridge on the page (we keep a small string)
-const SENDER_BRIDGE = `
-/*
-  This runs inside the page context. It:
-  - creates an RTCPeerConnection
-  - captures the page as a MediaStream using .captureStream() or getDisplayMedia
-  - adds the stream tracks to the pc and creates an offer
-  - exposes createOffer() and setAnswer(answer) helpers on window.__webrtcBridge
-*/
-
-// Create a bridge object if missing
-if (!window.__webrtcBridge) {
-  window.__webrtcBridge = {
-    pc: null,
-    localStream: null,
-    lastOffer: null,
-    createOffer: async function() {
-      if (this.pc) {
-        try { this.pc.close(); } catch(e) {}
-        this.pc = null;
-      }
-      this.pc = new RTCPeerConnection({
-        iceServers: []
-      });
-
-      this.pc.oniceconnectionstatechange = () => {
-        console.log('Sender pc ice connection state:', this.pc.iceConnectionState);
-      };
-
-      // Try capture strategies in order of preference
-      const captureFallback = async () => {
-        // 1) If the page has an element with captureStream (canvas/video), try capturing documentElement via captureStream (not standard everywhere)
-        try {
-          if (document.documentElement && document.documentElement.captureStream) {
-            console.log('Using documentElement.captureStream()');
-            return document.documentElement.captureStream(30);
-          }
-        } catch(e) { console.warn('documentElement.captureStream failed', e); }
-
-        // 2) Try capture a specific canvas if you have one (user may adapt)
-        try {
-          const canvas = document.querySelector('canvas');
-          if (canvas && canvas.captureStream) {
-            console.log('Using canvas.captureStream()');
-            return canvas.captureStream(30);
-          }
-        } catch(e) { console.warn('canvas.captureStream failed', e); }
-
-        // 3) Last resort: try getDisplayMedia (may be blocked in headless)
-        try {
-          console.log('Trying navigator.mediaDevices.getDisplayMedia()');
-          // userGesture requirement may block this in some environments
-          return await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-        } catch(e) {
-          console.error('getDisplayMedia failed:', e);
-          throw e;
-        }
-      };
-
-      // Acquire stream
-      try {
-        this.localStream = await captureFallback();
-      } catch (err) {
-        console.error('captureFallback failed:', err);
-        throw err;
-      }
-
-      // Attach tracks to pc
-      for (const t of this.localStream.getTracks()) {
-        this.pc.addTrack(t, this.localStream);
-      }
-
-      // Optional: collect ICE candidates to local array (we'll not use trickle ICE)
-      const candidates = [];
-      this.pc.onicecandidate = (ev) => {
-        if (ev.candidate) {
-          candidates.push(ev.candidate);
-        }
-      };
-
-      // Create an offer
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
-
-      // Wait a short time to gather localDescription + candidates then return
-      await new Promise(r => setTimeout(r, 500));
-      this.lastOffer = {
-        sdp: this.pc.localDescription.sdp,
-        type: this.pc.localDescription.type,
-        candidates
-      };
-      console.log('Created offer with sdp length', this.lastOffer.sdp.length);
-      return this.lastOffer;
-    },
-    // used by server to set the remote answer
-    setAnswer: async function(answer) {
-      if (!this.pc) throw new Error('pc not initialized');
-      await this.pc.setRemoteDescription(answer);
-      console.log('Remote description (answer) set on sender pc');
-      return true;
+// Take optimized screenshot (returns base64 or null if too similar)
+async function getOptimizedScreenshot() {
+  try {
+    await initBrowser();
+    if (!page || page.isClosed()) {
+      browser = null;
+      page = null;
+      await initBrowser();
     }
-  };
+
+    const raw = await page.screenshot({ type: 'jpeg', quality: 35 });
+
+    const compressed = await sharp(raw)
+      .resize(640, 360, { fit: 'contain' })
+      .jpeg({ quality: 30, mozjpeg: true })
+      .toBuffer();
+
+    if (previousScreenshot && Math.abs(compressed.length - previousScreenshot.length) < 500) {
+      return null;
+    }
+
+    previousScreenshot = compressed;
+    return compressed.toString('base64');
+
+  } catch {
+    browser = null;
+    page = null;
+    previousScreenshot = null;
+    return null;
+  }
 }
-window.__webrtcBridge; // return the bridge object
-`;
 
-// Endpoint to get an SDP Offer from the page (server calls page.evaluate to run createOffer)
-app.get('/webrtc/offer', async (req, res) => {
+// --- NORMAL API ENDPOINTS (NO WEBRTC ANYMORE) ---
+app.post('/api/navigate', async (req, res) => {
+  const { url } = req.body;
   try {
     await initBrowser();
-    if (!page) throw new Error('No page available');
-    // Inject the bridge if needed
-    await page.evaluate(SENDER_BRIDGE);
-
-    // Call createOffer inside the page
-    const offer = await page.evaluate(async () => {
-      try {
-        const bridge = window.__webrtcBridge;
-        const off = await bridge.createOffer();
-        // Return a plain object serializable across protocol
-        return { success: true, offer: off };
-      } catch (err) {
-        return { success: false, error: String(err) };
-      }
-    });
-
-    if (!offer.success) {
-      res.status(500).json({ success: false, error: offer.error || 'createOffer failed' });
-      return;
-    }
-
-    // Return the offer (sdp + type). Candidates are included if any.
-    res.json({ success: true, offer: offer.offer });
-  } catch (err) {
-    console.error('/webrtc/offer error', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// Endpoint for viewer to send back the SDP Answer (viewer posts answer object)
-app.post('/webrtc/answer', async (req, res) => {
-  try {
-    const { answer } = req.body;
-    if (!answer) return res.status(400).json({ success: false, error: 'missing answer' });
-
-    await initBrowser();
-    if (!page) throw new Error('No page available');
-
-    // Evaluate in page to set the answer
-    const ok = await page.evaluate(async (ans) => {
-      try {
-        // ans is an object with { type, sdp }
-        const bridge = window.__webrtcBridge;
-        if (!bridge) throw new Error('bridge missing');
-        await bridge.setAnswer({ type: ans.type, sdp: ans.sdp });
-        return { success: true };
-      } catch (e) {
-        return { success: false, error: String(e) };
-      }
-    }, answer);
-
-    if (!ok.success) {
-      return res.status(500).json({ success: false, error: ok.error });
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error('/webrtc/answer error', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-app.get('/health', (req, res) => res.json({ ok: true }));
-
-app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
-  try {
-    await initBrowser();
+    let safeUrl = url.match(/^https?:\/\//) ? url : 'https://' + url;
+    await page.goto(safeUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    previousScreenshot = null;
+    res.json({ success: true, url: safeUrl });
   } catch (e) {
-    console.error('Initial browser launch failed:', e);
+    res.status(500).json({ success:false, error: e.message });
   }
+});
+
+app.post('/api/click', async (req, res) => {
+  const { x, y } = req.body;
+  try {
+    await initBrowser();
+    await page.mouse.click(x, y);
+    previousScreenshot = null;
+    res.json({ success:true });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e.message });
+  }
+});
+
+app.post('/api/type', async (req, res) => {
+  const { text } = req.body;
+  try {
+    await initBrowser();
+    await page.keyboard.type(text);
+    res.json({ success:true });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e.message });
+  }
+});
+
+app.post('/api/key', async (req, res) => {
+  const { key } = req.body;
+  try {
+    await initBrowser();
+    await page.keyboard.press(key);
+    res.json({ success:true });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e.message });
+  }
+});
+
+app.post('/api/scroll', async (req, res) => {
+  const { deltaY } = req.body;
+  try {
+    await initBrowser();
+    await page.evaluate(d => window.scrollBy(0, d), deltaY);
+    res.json({ success:true });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e.message });
+  }
+});
+
+app.post('/api/back', async (req,res)=>{
+  try{ await initBrowser(); await page.goBack({waitUntil:'domcontentloaded'}); previousScreenshot=null; res.json({success:true}); }
+  catch(e){ res.status(500).json({success:false,error:e.message}); }
+});
+
+app.post('/api/forward', async (req,res)=>{
+  try{ await initBrowser(); await page.goForward({waitUntil:'domcontentloaded'}); previousScreenshot=null; res.json({success:true}); }
+  catch(e){ res.status(500).json({success:false,error:e.message}); }
+});
+
+app.post('/api/refresh', async (req,res)=>{
+  try{ await initBrowser(); await page.reload({waitUntil:'domcontentloaded'}); previousScreenshot=null; res.json({success:true}); }
+  catch(e){ res.status(500).json({success:false,error:e.message}); }
+});
+
+app.get('/api/url', async (req,res)=>{
+  try{ await initBrowser(); res.json({success:true,url:page.url()}); }
+  catch(e){ res.status(500).json({success:false,error:e.message}); }
+});
+
+const server = app.listen(PORT, ()=>console.log(`Virtual Browser running on ${PORT}`));
+
+// --- KEEP WS STREAMING, CAP TO 30FPS, NO IMAGE API ---
+const wss = new WebSocketServer({ server });
+
+wss.on('connection', (ws)=>{
+  console.log("Client connected");
+  const interval = setInterval(async ()=>{
+    const frame = await getOptimizedScreenshot();
+    if(frame && ws.readyState === 1){
+      ws.send(JSON.stringify({ type:"frame", data:frame }));
+    }
+  }, 33);
+
+  ws.on('close', ()=>{ clearInterval(interval); console.log("Client disconnected"); });
+  ws.on('error', ()=>{ clearInterval(interval); });
+});
+
+// Final cleanup safety
+process.on('SIGINT', async ()=>{
+  try{ if(browser) await browser.close(); } catch{}
+  process.exit();
 });
